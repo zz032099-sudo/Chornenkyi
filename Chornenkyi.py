@@ -1,61 +1,44 @@
-from github import Github
+import streamlit as st
 import pandas as pd
+import requests
 from datetime import datetime, timedelta
 
-# ====== 1. Авторизація через токен GitHub ======
-# Створи токен у GitHub (Settings → Developer settings → Personal access tokens)
-ACCESS_TOKEN = "your_github_token_here"
-g = Github(ACCESS_TOKEN)
+st.set_page_config(page_title="GitHub Monitor", layout="wide")
 
-# ====== 2. Список репозиторіїв для аналізу ======
-repos = [
-    "torvalds/linux",
-    "microsoft/vscode",
-    "tensorflow/tensorflow"
-]
+st.title("📊 Моніторинг проєктів GitHub")
 
-# ====== 3. Збір даних ======
-data = []
-for repo_name in repos:
-    repo = g.get_repo(repo_name)
+# === 1. Введення даних користувачем ===
+st.sidebar.header("⚙️ Налаштування")
+repos_input = st.sidebar.text_area(
+    "Введіть список репозиторіїв (формат: owner/repo, по одному в рядок):",
+    "torvalds/linux\nmicrosoft/vscode\ntensorflow/tensorflow"
+)
 
-    stars = repo.stargazers_count
-    forks = repo.forks_count
-    open_issues = repo.open_issues_count
+token = st.sidebar.text_input("GitHub Access Token (необов’язково)", type="password")
 
-    since = datetime.now() - timedelta(days=30)
-    commits = repo.get_commits(since=since).totalCount
-    pulls = repo.get_pulls(state="all").totalCount
+if st.sidebar.button("🔍 Отримати дані"):
+    repos = [r.strip() for r in repos_input.split("\n") if r.strip()]
+    headers = {"Authorization": f"token {token}"} if token else {}
 
-    data.append({
-        "Repository": repo_name,
-        "Stars": stars,
-        "Forks": forks,
-        "Open Issues": open_issues,
-        "Commits (30d)": commits,
-        "Pull Requests": pulls
-    })
+    all_data = []
+    since = (datetime.utcnow() - timedelta(days=30)).isoformat() + "Z"
 
-df = pd.DataFrame(data)
+    st.info("Збираю дані з GitHub...")
 
-# ====== 4. Рейтинг за зірками ======
-df = df.sort_values("Stars", ascending=False)
-print("\nРейтинг проєктів за кількістю зірок:\n")
-print(df[["Repository", "Stars"]])
+    for repo_name in repos:
+        url = f"https://api.github.com/repos/{repo_name}"
+        commits_url = f"https://api.github.com/repos/{repo_name}/commits?since={since}"
 
-# ====== 5. Графік активності ======
-plt.figure(figsize=(10, 5))
-plt.bar(df["Repository"], df["Commits (30d)"], color="skyblue")
-plt.title("Активність комітів за останні 30 днів")
-plt.ylabel("Кількість комітів")
-plt.xticks(rotation=30, ha="right")
-plt.tight_layout()
-plt.show()
+        repo_data = requests.get(url, headers=headers).json()
+        commits_data = requests.get(commits_url, headers=headers).json()
 
-# ====== 6. Аналіз динаміки ======
-print("\nАналіз динаміки розробки:")
-for _, row in df.iterrows():
-    print(f"- {row['Repository']}: {row['Commits (30d)']} комітів за 30 днів, "
-          f"{row['Pull Requests']} pull requests, "
-          f"{row['Open Issues']} відкритих issues.")
+        # Перевірка, чи не перевищено ліміт
+        if isinstance(repo_data, dict) and repo_data.get("message") == "API rate limit exceeded":
+            st.error("⛔ Перевищено ліміт запитів GitHub API! Використайте токен.")
+            st.stop()
 
+        commits_count = len(commits_data) if isinstance(commits_data, list) else 0
+
+        all_data.append({
+            "Репозиторій": repo_name,
+            "⭐ Зірки": repo_data.get("stargazers_count", 0),
